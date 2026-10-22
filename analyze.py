@@ -2,7 +2,8 @@
 
 Two runs per trading day, picked by the first argument (or by the clock if omitted):
   pre   08:00  US close (indices + AI watchlist from Yahoo) and TAIEX futures night session (TAIFEX)
-  post  15:30  TAIEX close, volume, institutional net buy/sell and the Taiwan watchlist (TWSE)
+  post  15:30  TAIEX close, volume, institutional net buy/sell and the Taiwan watchlist (TWSE),
+               each stock read on technicals, chips and fundamentals
 Each run:
 1. Appends to the history CSVs in data/.
 2. Scores each indicator -2..+2, weights them (config.toml [weights]) into -100..+100 and a label.
@@ -22,14 +23,20 @@ HERE = Path(__file__).resolve().parent
 CONFIG = HERE / "config.toml"
 DATA = HERE / "data"
 LATEST = DATA / "latest.json"   # {"pre": result, "post": result, "names": {code: name}}
+FUND = DATA / "fundamentals.json"   # {code: monthly revenue and valuation}, refreshed by post runs
 REPORT = HERE / "docs" / "index.html"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 
 HOLIDAYS_API = "https://openapi.twse.com.tw/v1/holidaySchedule/holidaySchedule"
 TWSE = "https://www.twse.com.tw/rwd/zh/{path}?response=json&{query}"
-TPEX = "https://www.tpex.org.tw/www/zh-tw/afterTrading/{path}?response=json&{query}"
+TPEX = "https://www.tpex.org.tw/www/zh-tw/{path}?response=json&{query}"
 TAIFEX_QUOTES = "https://mis.taifex.com.tw/futures/api/getQuoteList"
 YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}?range=1mo&interval=1d"
+# Monthly revenue and P/E, P/B, yield: listed (TWSE OpenAPI) and OTC (TPEx OpenAPI). A day behind, fine here.
+REVENUE_API = ("https://openapi.twse.com.tw/v1/opendata/t187ap05_L",
+               "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O")
+PE_TSE = "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"
+PE_OTC = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
 US_INDEX = {"^SOX": "費城半導體", "^IXIC": "那斯達克", "^GSPC": "S&P 500", "^DJI": "道瓊",
             "^VIX": "VIX 恐慌指數", "TWD=X": "美元兌台幣"}
 W_PRE = ("night_futures", "sox", "tsm_adr", "nasdaq", "ai_stocks", "vix", "usdtwd")
@@ -37,7 +44,9 @@ W_POST = ("taiex_change", "ai_tw", "ma", "volume", "foreign", "trust", "foreign_
 
 TAIEX_COLS = ["date", "open", "high", "low", "close", "change", "volume", "value", "transactions",
               "foreign_net", "trust_net", "dealer_net"]
-STOCK_COLS = ["date", "open", "high", "low", "close", "change", "volume", "value"]
+# foreign/trust/dealer: net buy in shares; margin/short: margin purchase and short sale balance in lots (張).
+STOCK_COLS = ["date", "open", "high", "low", "close", "change", "volume", "value",
+              "foreign", "trust", "dealer", "margin", "short"]
 US_COLS = ["date", "symbol", "close", "prev_close", "change_pct"]
 FUT_COLS = ["date", "session", "contract", "last", "ref", "change", "change_pct", "volume"]
 SIGNAL_COLS = ["date", "mode", "score", "label"]
@@ -191,7 +200,7 @@ def quotes_today(d, errors):
                                            "high": num(r[6]), "low": num(r[7]), "close": num(r[8]),
                                            "change": sign * (num(r[10]) or 0)})
     try:
-        for r in tpex("dailyQuotes", date=d.strftime("%Y/%m/%d"), type="EW")["tables"][0]["data"]:
+        for r in tpex("afterTrading/dailyQuotes", date=d.strftime("%Y/%m/%d"), type="EW")["tables"][0]["data"]:
             out.setdefault(r[0], (r[1].strip(), "otc", {
                 "date": d, "close": num(r[2]), "change": num(r[3]), "open": num(r[4]), "high": num(r[5]),
                 "low": num(r[6]), "volume": num(r[8]), "value": num(r[9])}))
@@ -213,11 +222,79 @@ def stock_month(code, d):
 def otc_month(code, d):
     """OTC stock's daily bars for d's month -> {date: row}. TPEx reports volume and value in thousands."""
     rows = {}
-    for r in tpex("tradingStock", code=code, date=d.strftime("%Y/%m/01"))["tables"][0]["data"]:
+    for r in tpex("afterTrading/tradingStock", code=code, date=d.strftime("%Y/%m/01"))["tables"][0]["data"]:
         rows[roc(r[0])] = {"date": roc(r[0]), "volume": num(r[1]) * 1000, "value": num(r[2]) * 1000,
                            "open": num(r[3]), "high": num(r[4]), "low": num(r[5]), "close": num(r[6]),
                            "change": num(r[7])}
     return rows
+
+
+def stock_flows(d):
+    """Every listed and OTC stock's institutional net buy in shares on day d -> {code: row}."""
+    out = {}
+    for r in twse("fund/T86", date=d.strftime("%Y%m%d"), selectType="ALLBUT0999")["data"]:
+        # 外陸資 + 外資自營商, 投信, 自營商 (自行買賣 + 避險)
+        out[r[0].strip()] = {"foreign": num(r[4]) + num(r[7]), "trust": num(r[10]), "dealer": num(r[11])}
+    try:
+        for r in tpex("insti/dailyTrade", type="Daily", sect="EW", date=d.strftime("%Y/%m/%d"))["tables"][0]["data"]:
+            out.setdefault(r[0].strip(), {"foreign": num(r[10]), "trust": num(r[13]), "dealer": num(r[22])})
+    except NotReady:
+        pass   # OTC not out yet; the next run fills the day in
+    return out
+
+
+def margins(d):
+    """Every listed and OTC stock's margin purchase and short sale balance (lots) on day d -> {code: row}."""
+    data = twse("marginTrading/MI_MARGN", date=d.strftime("%Y%m%d"), selectType="ALL")
+    table = next(t for t in data["tables"] if t.get("fields") and t["fields"][0] == "代號")
+    out = {r[0].strip(): {"margin": num(r[6]), "short": num(r[12])} for r in table["data"]}
+    try:
+        for r in tpex("margin/balance", date=d.strftime("%Y/%m/%d"))["tables"][0]["data"]:
+            out.setdefault(r[0].strip(), {"margin": num(r[6]), "short": num(r[14])})
+    except NotReady:
+        pass
+    return out
+
+
+def stock_chips(codes, days, today, errors):
+    """Per-stock flows and margin balances for the given recent days where any stock lacks them
+    -> {code: {date: row}}. Margin balances come out in the evening, so today's wait for tomorrow."""
+    hist = {c: {r["date"]: r for r in read_history(c)} for c in codes}
+    out = {c: {} for c in codes}
+    for d in days:
+        for col, fetch in (("foreign", stock_flows), ("margin", margins)):
+            missing = any(not h[d.isoformat()].get(col) for h in hist.values() if d.isoformat() in h)
+            if (d == today and col == "margin") or not (d == today or missing):
+                continue
+            try:
+                for c, row in fetch(d).items():
+                    if c in out:
+                        out[c].setdefault(d, {"date": d}).update(row)
+            except NotReady as e:
+                if d == today:
+                    errors.append(f"個股法人買賣超尚未公布：{e}")
+    return out
+
+
+def fundamentals(codes):
+    """Latest monthly revenue and valuation of the given stocks -> {code: {...}}. ETFs have none."""
+    out = {}
+    for url in REVENUE_API:
+        for r in get_json(url):
+            if r["公司代號"] in codes:
+                out[r["公司代號"]] = {"month": roc(r["資料年月"] + "01").isoformat()[:7],
+                                     "yoy": num(r["營業收入-去年同月增減(%)"]),
+                                     "mom": num(r["營業收入-上月比較增減(%)"]),
+                                     "ytd": num(r["累計營業收入-前期比較增減(%)"])}
+    for r in get_json(PE_TSE):
+        if r["Code"] in codes:
+            out.setdefault(r["Code"], {}).update(pe=num(r["PEratio"]), pb=num(r["PBratio"]),
+                                                 dy=num(r["DividendYield"]))
+    for r in get_json(PE_OTC):
+        if (c := r["SecuritiesCompanyCode"].strip()) in codes:
+            out.setdefault(c, {}).update(pe=num(r["PriceEarningRatio"]), pb=num(r["PriceBookRatio"]),
+                                         dy=num(r["YieldRatio"]))
+    return out
 
 
 def months_back(d, n):
@@ -379,16 +456,36 @@ def run_post(cfg, today, errors, names):
     except Exception as e:
         errors.append(f"個股收盤：{type(e).__name__}: {e}")
         return
+    # Per-stock institutional flows for the last 5 trading days (today included) and margin balances.
+    days = sorted({date.fromisoformat(r["date"]) for r in read_history("taiex")[-5:]} | {today})[-5:]
+    try:
+        chips = stock_chips(cfg["tw_all"], days, today, errors)
+    except Exception as e:
+        errors.append(f"個股籌碼：{type(e).__name__}: {e}")
+        chips = {}
+    # Monthly revenue and valuation change at most daily; on failure the last saved ones stay.
+    try:
+        fund = json.loads(FUND.read_text(encoding="utf-8")) if FUND.exists() else {}
+        FUND.write_text(json.dumps(fund | fundamentals(cfg["tw_all"]), ensure_ascii=False, indent=1),
+                        encoding="utf-8")
+    except Exception as e:
+        errors.append(f"月營收與本益比：{type(e).__name__}: {e}")
     for code in cfg["tw_all"]:
         try:
             if code not in quotes:
                 raise NotReady("今天的收盤資料裡沒有這個代號（代號錯誤或今天沒有成交）")
             names[code], market, t = quotes[code]
             rows = {today: t}
-            # A stock new to the list backfills three months, one call per month.
-            if len(read_history(code)) < 25:
-                for m in months_back(today, 2):
+            # A stock new to the list (or with a short history) backfills three months before this one,
+            # one call per month, so the 60-day average works.
+            h = read_history(code)
+            if not h or h[0]["date"][:7] > months_back(today, 3)[0].isoformat()[:7]:
+                for m in months_back(today, 3):
                     rows = (stock_month if market == "tse" else otc_month)(code, m) | rows
+            have = {r["date"] for r in h}
+            for d, row in chips.get(code, {}).items():
+                if d in rows or d.isoformat() in have:
+                    rows[d] = rows.get(d, {}) | row
             upsert(code, STOCK_COLS, rows.values())
             print(f'  {code} {names[code]:<6} {t["close"]:>10,.2f}  {t["change"]:+,.2f}'
                   f'  成交 {t["volume"] / 1000:,.0f} 張{"（上櫃）" if market == "otc" else ""}')
@@ -409,17 +506,138 @@ def pct_txt(p):
     return "—" if p is None else f"{p:+.2f}%"
 
 
+def bars(code):
+    """A Taiwan stock's history with numbers parsed, prices back-adjusted for splits and capital
+    reductions: a gap beyond the ±10% daily limit can only be one (e.g. 7800 -> 2610)."""
+    rows = [{k: fnum(v) if k != "date" else v for k, v in r.items()}
+            for r in read_history(code) if fnum(r["close"])]
+    f = 1
+    for i in range(len(rows) - 1, -1, -1):
+        r = rows[i]
+        r.update({k: r[k] * f for k in ("open", "high", "low", "close") if r.get(k)})
+        if i and abs((gap := r["close"] / f / rows[i - 1]["close"]) - 1) > 0.11:
+            f *= gap
+    return rows
+
+
 def stock_stats(code):
     """Latest close of a Taiwan stock with its change, 5-day change and moving averages, or None."""
-    h = read_history(code)
+    h = bars(code)
     if len(h) < 2:
         return None
-    c = [fnum(r["close"]) for r in h]
-    chg = fnum(h[-1]["change"]) or 0
+    c = [r["close"] for r in h]
+    chg = h[-1]["change"] or 0
     return {"date": h[-1]["date"], "close": c[-1], "change": chg, "pct": chg / (c[-1] - chg) * 100,
             "pct5": (c[-1] / c[-6] - 1) * 100 if len(c) > 5 else None,
             "ma5": mean(c[-5:]), "ma20": mean(c[-20:]),
-            "volume": fnum(h[-1]["volume"]) or 0, "value": fnum(h[-1]["value"]) or 0}
+            "volume": h[-1]["volume"] or 0, "value": h[-1]["value"] or 0}
+
+
+def ema(xs, n):
+    k, out = 2 / (n + 1), [xs[0]]
+    for x in xs[1:]:
+        out.append(out[-1] + k * (x - out[-1]))
+    return out
+
+
+def rsi(c, n=14):
+    """Wilder's RSI of the closes."""
+    up = [max(b - a, 0) for a, b in zip(c, c[1:])]
+    dn = [max(a - b, 0) for a, b in zip(c, c[1:])]
+    au, ad = mean(up[:n]), mean(dn[:n])
+    for u, d in zip(up[n:], dn[n:]):
+        au, ad = (au * (n - 1) + u) / n, (ad * (n - 1) + d) / n
+    return 100 if ad == 0 else 100 - 100 / (1 + au / ad)
+
+
+def kd(h, n=9):
+    """Taiwan-style stochastic (9, 3, 3) -> [(K, D)] per day from the n-th."""
+    k = d = 50
+    out = []
+    for i in range(n - 1, len(h)):
+        hi, lo = max(r["high"] or r["close"] for r in h[i - n + 1:i + 1]), min(r["low"] or r["close"] for r in h[i - n + 1:i + 1])
+        rsv = 50 if hi == lo else (h[i]["close"] - lo) / (hi - lo) * 100
+        k = k * 2 / 3 + rsv / 3
+        d = d * 2 / 3 + k / 3
+        out.append((k, d))
+    return out
+
+
+def clamp(x):
+    return max(-2, min(2, x))
+
+
+def stock_view(code, fund):
+    """A Taiwan stock read from the angles in code_artifact.md: technicals, chips and fundamentals,
+    each scored -2..+2 with a short note (None when there's no data), plus an overall label."""
+    h = bars(code)
+    if len(h) < 30:
+        return None
+    c = [r["close"] for r in h]
+    view = {}
+
+    # Technicals: price against the 5/10/20/60-day averages, plus KD, RSI and MACD as context.
+    mas = {n: mean(c[-n:]) for n in (5, 10, 20, 60) if len(c) >= n}
+    above = [n for n, m in mas.items() if c[-1] > m]
+    below = [n for n in mas if n not in above]
+    pos = ("站上全部均線" if not below else "跌破全部均線" if not above else
+           f'站上 {"、".join(map(str, above))} 日線，跌破 {"、".join(map(str, below))} 日線')
+    (pk, pd), (k, d) = kd(h)[-2:]
+    kd_txt = f"KD {k:.0f}/{d:.0f}" + (" 黃金交叉" if k > d and pk <= pd else " 死亡交叉" if k < d and pk >= pd else "")
+    kd_txt += "（超買）" if k > 80 else "（超賣）" if k < 20 else ""
+    dif = [a - b for a, b in zip(ema(c, 12), ema(c, 26))]
+    osc = [a - b for a, b in zip(dif, ema(dif, 9))]
+    macd = ("MACD 紅柱" if osc[-1] > 0 else "MACD 綠柱") + ("擴大" if abs(osc[-1]) > abs(osc[-2]) else "縮小")
+    q = f"，季線 {mas[60]:,.2f}" if 60 in mas else ""
+    view["tech"] = (round(4 * len(above) / len(mas)) - 2, f"{pos}{q}；{kd_txt}、RSI {rsi(c):.0f}、{macd}")
+
+    # Chips: foreign + trust net buy over the last 5 days as a share of the volume, then margin.
+    f5 = [r for r in h if r.get("foreign") is not None][-5:]
+    if f5:
+        fo, tr = sum(r["foreign"] for r in f5), sum(r["trust"] or 0 for r in f5)
+        vol = sum(r["volume"] or 0 for r in f5) or 1
+        share = (fo + tr) / vol * 100
+        score = band(share, 3, 10)
+        streak, sign = 0, 1 if f5[-1]["foreign"] > 0 else -1
+        for r in reversed(f5):
+            if r["foreign"] * sign <= 0:
+                break
+            streak += 1
+        notes = [f"外資 {len(f5)} 日 {fo / 1000:+,.0f} 張、投信 {tr / 1000:+,.0f} 張（占成交量 {share:+.0f}%）"]
+        if streak >= 3:
+            notes.append(f'外資連{"買" if sign > 0 else "賣"} {streak} 天')
+        m = [r for r in h if r.get("margin") is not None][-2:]
+        if len(m) == 2:
+            dm = m[1]["margin"] - m[0]["margin"]
+            notes.append(f"融資 {dm:+,.0f} 張")
+            # Retail buying on margin into a falling price: the chips are getting messy.
+            if m[0]["margin"] and dm / m[0]["margin"] > 0.02 and (m[1]["change"] or 0) < 0:
+                notes[-1] += "，股價跌融資增，籌碼凌亂"
+                score -= 1
+            if m[1]["margin"] and m[1]["short"] / m[1]["margin"] >= 0.3:
+                notes.append(f'券資比 {m[1]["short"] / m[1]["margin"]:.0%}，留意軋空')
+        view["chips"] = (clamp(score), "；".join(notes))
+    else:
+        view["chips"] = (None, "尚無個股法人資料")
+
+    # Fundamentals: monthly revenue growth, marked down for a rich valuation.
+    if fund and fund.get("yoy") is not None:
+        score = band(fund["yoy"], 10, 30)
+        txt = f'{int(fund["month"][5:])} 月營收年增 {fund["yoy"]:+.1f}%（月增 {fund["mom"]:+.1f}%）'
+        if fund.get("pe"):
+            txt += f'，本益比 {fund["pe"]:.1f}'
+            if fund["pe"] >= 60:
+                txt += "，估值偏高"
+                score -= 1
+        view["fund"] = (clamp(score), txt)
+    else:
+        view["fund"] = (None, "沒有營收資料（ETF 或尚未公布）")
+
+    used = [sc for sc, _ in view.values() if sc is not None]
+    avg = mean(used)
+    view["label"] = "偏多" if avg >= 1 else "偏空" if avg <= -1 else "中性"
+    view["total"] = sum(used)
+    return view
 
 
 def latest_us():
@@ -668,6 +886,37 @@ def ai_section(cfg, names):
             f'<div class="tbl"><table>{TW_HEAD}<tbody>{"".join(rows)}</tbody></table></div></section>')
 
 
+def load_fund():
+    try:
+        return json.loads(FUND.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def stock_groups(cfg):
+    """The Taiwan stocks as shown on the page: the [ai_tw] groups, then the watch list."""
+    return [*cfg["ai"].items(), *([("關注台股", cfg["tw"])] if cfg["tw"] else [])]
+
+
+def view_section(cfg, names):
+    """Each Taiwan stock scored on technicals, chips and fundamentals (code_artifact.md)."""
+    fund, rows = load_fund(), []
+    for group, codes in stock_groups(cfg):
+        rows.append(f'<tr class="grp"><td colspan="5">{escape(group)}</td></tr>')
+        for code in codes:
+            name = f'<td class="name">{code} <span class="mute">{escape(names.get(code, ""))}</span></td>'
+            if not (v := stock_view(code, fund.get(code))):
+                rows.append(f'<tr>{name}<td colspan="4" class="mute">資料不足</td></tr>')
+                continue
+            cells = "".join(f'<td class="why"><span class="dot {tone(sc)}">{"—" if sc is None else f"{sc:+d}"}</span> '
+                            f'{escape(txt)}</td>' for sc, txt in (v["tech"], v["chips"], v["fund"]))
+            rows.append(f'<tr>{name}<td><span class="dot {tone({"偏多": 1, "偏空": -1}.get(v["label"]))}">{v["label"]}</span></td>{cells}</tr>')
+    return ('<section id="view"><div class="sec-head"><h2>個股四面向</h2><span class="mute">技術面、籌碼面、基本面各評 −2～+2；'
+            '總體面見上方盤前、盤後指標</span></div>'
+            '<div class="tbl"><table class="wide"><thead><tr><th>股票</th><th>綜合</th><th>技術面</th><th>籌碼面</th>'
+            f'<th>基本面</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>')
+
+
 def watch_tables(cfg, names):
     tw = [tw_row(code, names) for code in cfg["tw"]]
     us_rows = latest_us()
@@ -684,6 +933,7 @@ def watch_tables(cfg, names):
     return (ai_section(cfg, names) +
             ('<section><div class="sec-head"><h2>關注台股</h2></div>'
              f'<div class="tbl"><table>{TW_HEAD}<tbody>{"".join(tw)}</tbody></table></div></section>' if tw else "") +
+            view_section(cfg, names) +
             f'<section><div class="sec-head"><h2>關注美股 AI 股</h2><span class="mute">美東 {us_day} 收盤</span></div>'
             '<div class="tbl narrow"><table><thead><tr><th>股票</th><th>收盤（美元）</th><th>漲跌幅</th></tr></thead>'
             f'<tbody>{"".join(us)}</tbody></table></div></section>')
@@ -734,7 +984,12 @@ def write_report(cfg, latest, ts, config_error=None):
         body.append(watch_tables(cfg, latest.get("names", {})))
 
     note = ("每個指標先依漲跌評 −2～+2 分，乘上 config.toml 的權重後加總，換算成 −100～+100 分。"
-            "命中率只計算偏多或偏空的判斷，中性不計。資料來源：臺灣證券交易所、臺灣期貨交易所、Yahoo Finance。"
+            "命中率只計算偏多或偏空的判斷，中性不計。"
+            "個股四面向：技術面看收盤站上幾條均線（5、10、20、60 日）；籌碼面看近 5 日外資加投信買賣超占成交量"
+            "（3% 以上 ±1、10% 以上 ±2），股價跌而融資增加 2% 以上扣 1 分；基本面看最近一個月營收年增率"
+            "（10% 以上 ±1、30% 以上 ±2），本益比 60 倍以上扣 1 分；三面平均 ≥ 1 偏多、≤ −1 偏空。"
+            "股票分割或減資的價格已還原。"
+            "資料來源：臺灣證券交易所、證券櫃檯買賣中心、臺灣期貨交易所、Yahoo Finance。"
             "本頁為程式自動產生，僅供參考，不構成投資建議。")
     chip_html = "".join(f"<span>{escape(c)}</span>" for c in chips)
     REPORT.parent.mkdir(exist_ok=True)
@@ -807,6 +1062,9 @@ tr.grp td {{ background:rgba(127,127,127,.07); font-weight:700; font-size:13px; 
 .num {{ font-variant-numeric:tabular-nums; white-space:nowrap; }}
 .note {{ font-size:13px; color:var(--mute); min-width:240px; }}
 .mute {{ color:var(--mute); }}
+table.wide {{ min-width:980px; }}
+.why {{ font-size:13px; min-width:220px; }}
+.why .dot {{ margin-right:4px; }}
 .up {{ color:var(--up); }} .down {{ color:var(--down); }} .flat {{ color:var(--flat); }}
 .dot {{ display:inline-block; min-width:36px; text-align:center; border-radius:999px; padding:1px 8px;
   font-size:13px; font-weight:700; background:rgba(127,127,127,.12); }}
@@ -879,6 +1137,14 @@ def notify(cfg, latest, mode, test):
             if s := stock_stats(code):
                 lines.append(f'{code} {names.get(code, "")}  {s["close"]:,.2f}  {s["change"]:+,.2f}'
                              f'（{pct_txt(s["pct"])}）')
+        fund = load_fund()
+        lines += ["", "【個股四面向】技術／籌碼／基本 各 −2～+2"]
+        for code in cfg["tw_all"]:
+            if v := stock_view(code, fund.get(code)):
+                sc = "／".join("—" if x is None else f"{x:+d}" for x, _ in (v["tech"], v["chips"], v["fund"]))
+                lines += [f'{code} {names.get(code, "")}  {v["label"]}（{sc}）',
+                          *(f"  {k}：{txt}" for k, (_, txt) in zip(("技術", "籌碼", "基本"),
+                                                                 (v["tech"], v["chips"], v["fund"])))]
 
     h, n = hit_rate()[mode]
     lines += ["", f"近 {n} 次方向命中 {h} 次（{h / n:.0%}）" if n else "命中率：累積資料中"]

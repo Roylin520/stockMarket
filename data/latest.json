@@ -103,7 +103,7 @@
  },
  "post": {
   "date": "2026-10-22",
-  "ts": "2026-10-22 17:59",
+  "ts": "2026-10-22 18:40",
   "score": -64,
   "label": "強烈偏空",
   "signals": [
@@ -165,7 +165,7 @@
    }
   ],
   "errors": [],
-  "scheduled": true
+  "scheduled": false
  },
  "emailed": {
   "post": "2026-10-22"

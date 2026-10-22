@@ -30,6 +30,15 @@ PROBES = [
     ("證交所 三大法人", f"https://www.twse.com.tw/rwd/zh/fund/BFI82U?response=json&type=day&dayDate={YMD}"),
     ("證交所 2330 月成交", f"https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?response=json&date={YMD}&stockNo=2330"),
     ("證交所 0050 月成交", f"https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?response=json&date={YMD}&stockNo=0050"),
+    ("證交所 個股三大法人", f"https://www.twse.com.tw/rwd/zh/fund/T86?response=json&date={YMD}&selectType=ALLBUT0999"),
+    ("證交所 融資融券", f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?response=json&date={YMD}&selectType=ALL"),
+    ("證交所 月營收", "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"),
+    ("證交所 本益比", "https://openapi.twse.com.tw/v1/exchangeReport/BWIBBU_ALL"),
+    # 櫃買中心
+    ("櫃買 個股三大法人", f"https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade?response=json&type=Daily&sect=EW&date={d:%Y/%m/%d}"),
+    ("櫃買 融資融券", f"https://www.tpex.org.tw/www/zh-tw/margin/balance?response=json&date={d:%Y/%m/%d}"),
+    ("櫃買 月營收", "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"),
+    ("櫃買 本益比", "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"),
     ("證交所 即時報價", "https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_t00.tw|tse_2330.tw|tse_0050.tw"),
     # 期交所
     ("期交所 期貨每日行情", "https://openapi.taifex.com.tw/v1/DailyMarketReportFut"),
