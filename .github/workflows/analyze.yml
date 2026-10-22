@@ -41,9 +41,13 @@ jobs:
     env:
       TZ: Asia/Taipei
     steps:
-      - uses: actions/checkout@v4
+      # Check out the branch tip, not the triggering commit: a re-run would otherwise start from
+      # data/ files that later runs have already replaced.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -63,5 +67,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs data
           git diff --cached --quiet || git commit -m "Update analysis $(date '+%Y-%m-%d %H:%M')"
-          git pull --rebase --quiet
+          # If another run committed meanwhile, keep this run's newer data/ and docs/ on conflict.
+          git pull --rebase --quiet -X theirs
           git push
