@@ -1,0 +1,67 @@
+name: Taiwan stock daily analysis
+
+on:
+  push:
+    branches: [main]
+    paths: [config.toml, analyze.py]   # editing the settings re-runs immediately (no email)
+  schedule:
+    # Times are UTC (Taipei = UTC+8). GitHub may start runs late or skip them, so each slot has a retry;
+    # a retry after a complete run does nothing.
+    - cron: "0 0 * * 1-5"    # 08:00 pre-market
+    - cron: "20 0 * * 1-5"   # 08:20 pre-market retry
+    - cron: "30 7 * * 1-5"   # 15:30 post-market
+    - cron: "30 8 * * 1-5"   # 16:30 post-market retry (institutional flows can be late)
+  workflow_dispatch:          # allows a manual "Run workflow" button
+    inputs:
+      mode:
+        description: "盤前 pre／盤後 post／auto 依時間判斷（中午前為盤前）"
+        type: choice
+        options: [auto, pre, post]
+        default: auto
+      test_email:
+        description: "寄一封測試信"
+        type: boolean
+        default: false
+      scheduled:
+        description: "由外部排程（cron-job.org）觸發"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: analyze
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TZ: Asia/Taipei
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run analysis
+        run: python -u analyze.py ${{ inputs.mode != 'auto' && inputs.mode || '' }}
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          TEST_EMAIL: ${{ inputs.test_email }}
+          SCHEDULED: ${{ github.event_name == 'schedule' || inputs.scheduled }}
+
+      - name: Commit report and history
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs data
+          git diff --cached --quiet || git commit -m "Update analysis $(date '+%Y-%m-%d %H:%M')"
+          git pull --rebase --quiet
+          git push

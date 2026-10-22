@@ -1,0 +1,20 @@
+name: API probe
+
+on:
+  workflow_dispatch:   # 在 Actions 頁面按「Run workflow」手動執行
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TZ: Asia/Taipei
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Probe data sources from a GitHub runner
+        run: python -u probe.py

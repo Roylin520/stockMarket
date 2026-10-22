@@ -1,0 +1,171 @@
+{
+ "names": {
+  "^SOX": "費城半導體",
+  "^IXIC": "那斯達克",
+  "^GSPC": "S&P 500",
+  "^DJI": "道瓊",
+  "^VIX": "VIX 恐慌指數",
+  "TWD=X": "美元兌台幣",
+  "NVDA": "NVIDIA Corporation",
+  "TSM": "Taiwan Semiconductor Manufactur",
+  "AVGO": "Broadcom Inc.",
+  "AMD": "Advanced Micro Devices, Inc.",
+  "MSFT": "Microsoft Corporation",
+  "GOOGL": "Alphabet Inc.",
+  "META": "Meta Platforms, Inc.",
+  "AMZN": "Amazon.com, Inc.",
+  "2330": "台積電",
+  "0050": "元大台灣50",
+  "3711": "日月光投控",
+  "2454": "聯發科",
+  "3661": "世芯-KY",
+  "3443": "創意",
+  "5274": "信驊",
+  "2317": "鴻海",
+  "2382": "廣達",
+  "3231": "緯創",
+  "6669": "緯穎",
+  "2356": "英業達",
+  "2376": "技嘉",
+  "3017": "奇鋐",
+  "3324": "雙鴻",
+  "2308": "台達電",
+  "2383": "台光電",
+  "2368": "金像電",
+  "3037": "欣興",
+  "2059": "川湖"
+ },
+ "pre": {
+  "date": "2026-10-22",
+  "ts": "2026-10-22 08:54",
+  "score": 64,
+  "label": "強烈偏多",
+  "signals": [
+   {
+    "key": "night_futures",
+    "name": "台指期夜盤",
+    "value": "+1.00%",
+    "score": 2,
+    "weight": 3.0,
+    "note": "TX116 47,482 點，比加權指數收盤 +594 點"
+   },
+   {
+    "key": "sox",
+    "name": "費城半導體",
+    "value": "+1.97%",
+    "score": 2,
+    "weight": 2.0,
+    "note": "11,505.56（10/21 收盤）"
+   },
+   {
+    "key": "tsm_adr",
+    "name": "台積電 ADR",
+    "value": "+1.16%",
+    "score": 1,
+    "weight": 2.0,
+    "note": "425.08（10/20 收盤），換算 2,759 元，比 2330 收盤溢價 +14.0%"
+   },
+   {
+    "key": "nasdaq",
+    "name": "那斯達克",
+    "value": "+1.05%",
+    "score": 1,
+    "weight": 1.0,
+    "note": "26,702.86（10/21 收盤）"
+   },
+   {
+    "key": "ai_stocks",
+    "name": "美股 AI 股平均",
+    "value": "-0.35%",
+    "score": 0,
+    "weight": 1.0,
+    "note": "最強 TSM +1.16%，最弱 META -1.59%"
+   },
+   {
+    "key": "vix",
+    "name": "VIX 恐慌指數",
+    "value": "16.68",
+    "score": 0,
+    "weight": 1.0,
+    "note": "-3.64%；15 以下安定、22 以上緊張、30 以上恐慌"
+   },
+   {
+    "key": "usdtwd",
+    "name": "美元兌台幣",
+    "value": "32.458",
+    "score": 1,
+    "weight": 1.0,
+    "note": "-0.37%，台幣升值"
+   }
+  ],
+  "errors": [],
+  "scheduled": false
+ },
+ "post": {
+  "date": "2026-10-21",
+  "ts": "2026-10-21 21:32",
+  "score": 27,
+  "label": "中性",
+  "signals": [
+   {
+    "key": "taiex_change",
+    "name": "加權指數",
+    "value": "+1.28%",
+    "score": 1,
+    "weight": 2.0,
+    "note": "46,887.77（+594.84）"
+   },
+   {
+    "key": "ai_tw",
+    "name": "台股 AI 概念股",
+    "value": "+1.37%",
+    "score": 1,
+    "weight": 2.0,
+    "note": "19 檔平均，上漲 14、下跌 5；最強 欣興 +4.27%，最弱 奇鋐 -2.71%"
+   },
+   {
+    "key": "ma",
+    "name": "均線位置",
+    "value": "站上 5 日",
+    "score": 0,
+    "weight": 2.0,
+    "note": "5 日線 46,817，20 日線 48,155"
+   },
+   {
+    "key": "volume",
+    "name": "量能",
+    "value": "0.86 倍",
+    "score": 0,
+    "weight": 1.0,
+    "note": "成交 8,746 億，前 5 日平均 10,155 億；1.2 倍以上算放量"
+   },
+   {
+    "key": "foreign",
+    "name": "外資",
+    "value": "+22.4 億",
+    "score": 0,
+    "weight": 2.0,
+    "note": "買超或賣超 50 億以上 ±1、200 億以上 ±2"
+   },
+   {
+    "key": "trust",
+    "name": "投信",
+    "value": "+128.0 億",
+    "score": 2,
+    "weight": 1.0,
+    "note": "買超或賣超 20 億以上 ±1、80 億以上 ±2"
+   },
+   {
+    "key": "foreign_streak",
+    "name": "外資連續",
+    "value": "連買 1 天",
+    "score": 0,
+    "weight": 1.0,
+    "note": "連 3 天以上 ±1、5 天以上 ±2"
+   }
+  ],
+  "errors": [],
+  "scheduled": false
+ },
+ "emailed": {}
+}
