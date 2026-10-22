@@ -37,7 +37,7 @@
  },
  "pre": {
   "date": "2026-10-22",
-  "ts": "2026-10-22 09:37",
+  "ts": "2026-10-22 09:55",
   "score": 77,
   "label": "強烈偏多",
   "signals": [
@@ -92,14 +92,14 @@
    {
     "key": "usdtwd",
     "name": "美元兌台幣",
-    "value": "32.487",
+    "value": "32.488",
     "score": 1,
     "weight": 1.0,
     "note": "-0.28%，台幣升值"
    }
   ],
   "errors": [],
-  "scheduled": false
+  "scheduled": true
  },
  "post": {
   "date": "2026-10-21",
@@ -167,5 +167,11 @@
   "errors": [],
   "scheduled": false
  },
- "emailed": {}
+ "emailed": {},
+ "tries": {
+  "pre": [
+   "2026-10-22",
+   1
+  ]
+ }
 }
