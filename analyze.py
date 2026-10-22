@@ -236,6 +236,12 @@ def yahoo_last(sym):
     tz = timezone(timedelta(seconds=meta["gmtoffset"]))
     bars = [(datetime.fromtimestamp(t, tz).date(), c)
             for t, c in zip(res["timestamp"], res["indicators"]["quote"][0]["close"]) if c is not None]
+    # For stocks Yahoo often leaves the latest day's close empty for hours after the close;
+    # the real close is only in meta.regularMarketPrice.
+    if meta.get("regularMarketPrice") and meta.get("regularMarketTime"):
+        last = datetime.fromtimestamp(meta["regularMarketTime"], tz).date()
+        if last > bars[-1][0]:
+            bars.append((last, meta["regularMarketPrice"]))
     (_, prev), (d, close) = bars[-2], bars[-1]
     return d, close, prev, meta.get("shortName") or sym
 
