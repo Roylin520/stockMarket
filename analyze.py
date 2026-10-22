@@ -569,7 +569,8 @@ def clamp(x):
 
 def stock_view(code, fund):
     """A Taiwan stock read from the angles in code_artifact.md: technicals, chips and fundamentals,
-    each scored -2..+2 with a short note (None when there's no data), plus an overall label."""
+    each scored -2..+2 with a short note (None when there's no data), plus an overall label and
+    the same read in plain words for readers new to stocks."""
     h = bars(code)
     if len(h) < 30:
         return None
@@ -590,6 +591,12 @@ def stock_view(code, fund):
     macd = ("MACD 紅柱" if osc[-1] > 0 else "MACD 綠柱") + ("擴大" if abs(osc[-1]) > abs(osc[-2]) else "縮小")
     q = f"，季線 {mas[60]:,.2f}" if 60 in mas else ""
     view["tech"] = (round(4 * len(above) / len(mas)) - 2, f"{pos}{q}；{kd_txt}、RSI {rsi(c):.0f}、{macd}")
+    a20, a60 = c[-1] > mas[20], c[-1] > mas.get(60, mas[20])
+    plain = ["股價在 1 個月和 3 個月平均之上，走勢強" if a20 and a60 else
+             "短線拉回，但仍在 3 個月平均之上" if a60 else
+             "短線轉強，但還在 3 個月平均之下" if a20 else
+             "最近幾天止穩，但還在 1 個月和 3 個月平均之下" if c[-1] > mas[5] else
+             "股價跌到 1 個月和 3 個月平均以下，走勢弱"]
 
     # Chips: foreign + trust net buy over the last 5 days as a share of the volume, then margin.
     f5 = [r for r in h if r.get("foreign") is not None][-5:]
@@ -617,6 +624,10 @@ def stock_view(code, fund):
             if m[1]["margin"] and m[1]["short"] / m[1]["margin"] >= 0.3:
                 notes.append(f'券資比 {m[1]["short"] / m[1]["margin"]:.0%}，留意軋空')
         view["chips"] = (clamp(score), "；".join(notes))
+        plain.append(f'外資連 {streak} 天{"買進" if sign > 0 else "賣出"}' if streak >= 3 else
+                     "法人近 5 天買進" if share >= 3 else "法人近 5 天賣出" if share <= -3 else "法人買賣不明顯")
+        if "籌碼凌亂" in view["chips"][1]:
+            plain.append("借錢買股的散戶變多，籌碼較亂")
     else:
         view["chips"] = (None, "尚無個股法人資料")
 
@@ -630,13 +641,25 @@ def stock_view(code, fund):
                 txt += "，估值偏高"
                 score -= 1
         view["fund"] = (clamp(score), txt)
+        y, mon = fund["yoy"], int(fund["month"][5:])
+        plain.append(f"{mon} 月營收比去年多 {y:.0f}%，成長強" if y >= 30 else f"{mon} 月營收比去年多 {y:.0f}%"
+                     if y >= 10 else f"{mon} 月營收和去年差不多" if y > -10 else f"{mon} 月營收比去年少 {-y:.0f}%")
+        if fund.get("pe") and fund["pe"] >= 60:
+            plain[-1] += f'，但股價偏貴（本益比 {fund["pe"]:.0f} 倍）'
     else:
         view["fund"] = (None, "沒有營收資料（ETF 或尚未公布）")
 
     used = [sc for sc, _ in view.values() if sc is not None]
     avg = mean(used)
-    view["label"] = "偏多" if avg >= 1 else "偏空" if avg <= -1 else "中性"
-    view["total"] = sum(used)
+    view["label"] = "偏強" if avg >= 1 else "偏弱" if avg <= -1 else "中性"
+    view["tone"] = 1 if avg >= 1 else -1 if avg <= -1 else 0
+    # The overall call can disagree with the price; say so rather than leave a beginner puzzled.
+    t = view["tech"][0]
+    view["headline"] = view["label"] + ("，但股價還沒跟上" if avg >= 1 and t < 0 else
+                                        "，但股價還撐著" if avg <= -1 and t > 0 else
+                                        "，但跌深了，可能反彈" if k < 20 and avg < 1 else
+                                        "，但漲多了，小心回檔" if k > 80 and avg > -1 else "")
+    view["plain"] = "；".join(plain) + "。"
     return view
 
 
@@ -898,23 +921,68 @@ def stock_groups(cfg):
     return [*cfg["ai"].items(), *([("關注台股", cfg["tw"])] if cfg["tw"] else [])]
 
 
+def spark(code, color, n=60):
+    """Small inline SVG of a stock's close with its 20- and 60-day averages over the last n days,
+    the price line coloured like the card's verdict so the two never disagree."""
+    c = [r["close"] for r in bars(code)]
+    if len(c) < 20:
+        return ""
+    ma = {w: [mean(c[i - w + 1:i + 1]) if i >= w - 1 else None for i in range(len(c))][-n:] for w in (20, 60)}
+    c = c[-n:]
+    vals = c + [v for m in ma.values() for v in m if v]
+    lo, hi = min(vals), max(vals)
+    W, H = 300, 72
+
+    def pts(series):
+        return " ".join(f"{i * W / (len(series) - 1):.1f},{H - 3 - (v - lo) / ((hi - lo) or 1) * (H - 6):.1f}"
+                        for i, v in enumerate(series) if v)
+
+    return (f'<svg class="spark" viewBox="0 0 {W} {H}" preserveAspectRatio="none" role="img" '
+            f'aria-label="近 {len(c)} 日股價與月線、季線">'
+            f'<polyline class="m60" points="{pts(ma[60])}"/><polyline class="m20" points="{pts(ma[20])}"/>'
+            f'<polyline class="px {color}" points="{pts(c)}"/></svg>')
+
+
+def stock_card(code, names, fund):
+    """One stock: plain-language read and a small chart up front, the scored details folded away."""
+    head = f'<b>{code} {escape(names.get(code, ""))}</b>'
+    if not (v := stock_view(code, fund.get(code))):
+        return f'<div class="stock"><div class="s-head">{head}</div><p class="mute">資料不足</p></div>'
+    s = stock_stats(code)
+    detail = "".join(f'<li><span class="dot {tone(sc)}">{"—" if sc is None else f"{sc:+d}"}</span>'
+                     f'<b>{k}</b>{escape(txt)}</li>'
+                     for k, (sc, txt) in zip(("技術面", "籌碼面", "基本面"), (v["tech"], v["chips"], v["fund"])))
+    return (f'<div class="stock"><div class="s-head">{head}<span class="num {tone(s["pct"])}">'
+            f'{s["close"]:,.2f}　{pct_txt(s["pct"])}</span></div>'
+            f'<div class="s-label {tone(v["tone"])}">{escape(v["headline"])}</div>{spark(code, tone(v["tone"]))}'
+            f'<p class="s-plain">{escape(v["plain"])}</p>'
+            f'<details><summary>看細節</summary><ul>{detail}</ul></details></div>')
+
+
 def view_section(cfg, names):
-    """Each Taiwan stock scored on technicals, chips and fundamentals (code_artifact.md)."""
-    fund, rows = load_fund(), []
+    """Each Taiwan stock as a card, read on technicals, chips and fundamentals (code_artifact.md)."""
+    fund, parts = load_fund(), []
     for group, codes in stock_groups(cfg):
-        rows.append(f'<tr class="grp"><td colspan="5">{escape(group)}</td></tr>')
-        for code in codes:
-            name = f'<td class="name">{code} <span class="mute">{escape(names.get(code, ""))}</span></td>'
-            if not (v := stock_view(code, fund.get(code))):
-                rows.append(f'<tr>{name}<td colspan="4" class="mute">資料不足</td></tr>')
-                continue
-            cells = "".join(f'<td class="why"><span class="dot {tone(sc)}">{"—" if sc is None else f"{sc:+d}"}</span> '
-                            f'{escape(txt)}</td>' for sc, txt in (v["tech"], v["chips"], v["fund"]))
-            rows.append(f'<tr>{name}<td><span class="dot {tone({"偏多": 1, "偏空": -1}.get(v["label"]))}">{v["label"]}</span></td>{cells}</tr>')
-    return ('<section id="view"><div class="sec-head"><h2>個股四面向</h2><span class="mute">技術面、籌碼面、基本面各評 −2～+2；'
-            '總體面見上方盤前、盤後指標</span></div>'
-            '<div class="tbl"><table class="wide"><thead><tr><th>股票</th><th>綜合</th><th>技術面</th><th>籌碼面</th>'
-            f'<th>基本面</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div></section>')
+        parts.append(f'<h3>{escape(group)}</h3><div class="stocks">'
+                     + "".join(stock_card(c, names, fund) for c in codes) + "</div>")
+    return ('<section id="view"><div class="sec-head"><h2>個股白話分析</h2><span class="mute">'
+            '小圖：<i class="key"></i>近 3 個月股價　<i class="key m20"></i>月線　<i class="key m60"></i>季線；'
+            '股價在兩條線上面代表走勢強</span></div>' + "".join(parts) + '</section>')
+
+
+GUIDE = [("怎麼看分數", "最上面兩張卡片是整個台股的判斷：盤前預判猜今天開盤方向，盤後評分看今天收盤強弱。"),
+         ("紅漲綠跌", "台股習慣紅色代表上漲、偏強，綠色代表下跌、偏弱，和歐美相反。"),
+         ("均線（月線、季線）", "最近一段時間的平均股價：月線約 20 個交易日、季線約 60 個交易日。"
+          "股價在均線上面代表最近買的人多半賺錢，走勢強；在下面代表走勢弱。"),
+         ("外資、投信", "外資是外國的法人機構，買賣金額最大，最能帶動大盤；投信是國內的基金公司。"
+          "連續幾天買進通常代表看好。"),
+         ("營收年增", "這個月營收和去年同一個月比較，看公司生意有沒有變好。"),
+         ("本益比", "股價是公司一年獲利的幾倍，用來看股價貴不貴；一般 10～20 倍算合理，60 倍以上算偏貴。")]
+
+
+def guide():
+    items = "".join(f"<dt>{escape(t)}</dt><dd>{escape(d)}</dd>" for t, d in GUIDE)
+    return f'<details class="guide"><summary>第一次看？點這裡看怎麼讀這一頁</summary><dl>{items}</dl></details>'
 
 
 def watch_tables(cfg, names):
@@ -971,6 +1039,7 @@ def write_report(cfg, latest, ts, config_error=None):
                      f'<span class="mute">{fmt_day(r["date"])}・{sub}</span></div>'
                      f'<div class="big {t}">{r["label"]}<small>{r["score"]:+d} 分</small></div>'
                      f'{gauge(r["score"])}<div class="sub">{rate}，對照{target}</div></a>')
+    body.append(guide())
     body.append(f'<div class="cards">{"".join(cards)}</div>')
 
     for mode, title, sub in (("pre", "盤前指標", "美股收盤與台指期夜盤"), ("post", "盤後指標", "加權指數與三大法人")):
@@ -985,9 +1054,9 @@ def write_report(cfg, latest, ts, config_error=None):
 
     note = ("每個指標先依漲跌評 −2～+2 分，乘上 config.toml 的權重後加總，換算成 −100～+100 分。"
             "命中率只計算偏多或偏空的判斷，中性不計。"
-            "個股四面向：技術面看收盤站上幾條均線（5、10、20、60 日）；籌碼面看近 5 日外資加投信買賣超占成交量"
+            "個股白話分析：技術面看收盤站上幾條均線（5、10、20、60 日）；籌碼面看近 5 日外資加投信買賣超占成交量"
             "（3% 以上 ±1、10% 以上 ±2），股價跌而融資增加 2% 以上扣 1 分；基本面看最近一個月營收年增率"
-            "（10% 以上 ±1、30% 以上 ±2），本益比 60 倍以上扣 1 分；三面平均 ≥ 1 偏多、≤ −1 偏空。"
+            "（10% 以上 ±1、30% 以上 ±2），本益比 60 倍以上扣 1 分；三面平均 ≥ 1 偏強、≤ −1 偏弱。"
             "股票分割或減資的價格已還原。"
             "資料來源：臺灣證券交易所、證券櫃檯買賣中心、臺灣期貨交易所、Yahoo Finance。"
             "本頁為程式自動產生，僅供參考，不構成投資建議。")
@@ -1062,9 +1131,30 @@ tr.grp td {{ background:rgba(127,127,127,.07); font-weight:700; font-size:13px; 
 .num {{ font-variant-numeric:tabular-nums; white-space:nowrap; }}
 .note {{ font-size:13px; color:var(--mute); min-width:240px; }}
 .mute {{ color:var(--mute); }}
-table.wide {{ min-width:980px; }}
-.why {{ font-size:13px; min-width:220px; }}
-.why .dot {{ margin-right:4px; }}
+h3 {{ font-size:15px; font-weight:700; margin:18px 0 8px; color:var(--mute); }}
+.stocks {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:12px; }}
+.stock {{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px;
+  box-shadow:var(--shadow); min-width:0; }}
+.s-head {{ display:flex; justify-content:space-between; align-items:baseline; gap:8px; flex-wrap:wrap; }}
+.s-label {{ font-size:18px; font-weight:900; margin:4px 0 6px; }}
+.spark {{ display:block; width:100%; height:64px; margin:4px 0 8px; }}
+.spark polyline {{ fill:none; vector-effect:non-scaling-stroke; stroke-linejoin:round; }}
+.spark .px {{ stroke-width:2.2; stroke:var(--flat); }} .spark .px.up {{ stroke:var(--up); }}
+.spark .px.down {{ stroke:var(--down); }}
+.spark .m20 {{ stroke:var(--mute); stroke-width:1.3; stroke-dasharray:4 3; }}
+.spark .m60 {{ stroke:var(--brand); stroke-width:1.5; stroke-dasharray:1 3; opacity:.8; }}
+.key {{ display:inline-block; width:16px; height:0; vertical-align:middle; margin:0 4px 0 2px;
+  border-top:2px solid var(--ink); }}
+.key.m20 {{ border-top:1.5px dashed var(--mute); }} .key.m60 {{ border-top:2px dotted var(--brand); }}
+.s-plain {{ margin:0; font-size:14px; }}
+details summary {{ cursor:pointer; color:var(--brand); font-size:13px; margin-top:8px; }}
+.stock ul {{ list-style:none; padding:0; margin:8px 0 0; font-size:13px; color:var(--mute); }}
+.stock li {{ margin-top:6px; }} .stock li b {{ color:var(--ink); margin:0 6px; font-weight:500; }}
+.guide {{ background:var(--card); border:1px solid var(--line); border-radius:14px; padding:10px 16px;
+  margin-bottom:14px; box-shadow:var(--shadow); }}
+.guide summary {{ margin:0; font-size:14px; font-weight:700; }}
+.guide dl {{ margin:8px 0 2px; font-size:14px; }} .guide dt {{ font-weight:700; margin-top:10px; }}
+.guide dd {{ margin:2px 0 0; color:var(--mute); }}
 .up {{ color:var(--up); }} .down {{ color:var(--down); }} .flat {{ color:var(--flat); }}
 .dot {{ display:inline-block; min-width:36px; text-align:center; border-radius:999px; padding:1px 8px;
   font-size:13px; font-weight:700; background:rgba(127,127,127,.12); }}
@@ -1138,13 +1228,10 @@ def notify(cfg, latest, mode, test):
                 lines.append(f'{code} {names.get(code, "")}  {s["close"]:,.2f}  {s["change"]:+,.2f}'
                              f'（{pct_txt(s["pct"])}）')
         fund = load_fund()
-        lines += ["", "【個股四面向】技術／籌碼／基本 各 −2～+2"]
+        lines += ["", "【個股白話分析】走勢圖與細節見網頁"]
         for code in cfg["tw_all"]:
             if v := stock_view(code, fund.get(code)):
-                sc = "／".join("—" if x is None else f"{x:+d}" for x, _ in (v["tech"], v["chips"], v["fund"]))
-                lines += [f'{code} {names.get(code, "")}  {v["label"]}（{sc}）',
-                          *(f"  {k}：{txt}" for k, (_, txt) in zip(("技術", "籌碼", "基本"),
-                                                                 (v["tech"], v["chips"], v["fund"])))]
+                lines += [f'{code} {names.get(code, "")}｜{v["headline"]}', f'  {v["plain"]}']
 
     h, n = hit_rate()[mode]
     lines += ["", f"近 {n} 次方向命中 {h} 次（{h / n:.0%}）" if n else "命中率：累積資料中"]
