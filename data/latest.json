@@ -104,8 +104,8 @@
  },
  "post": {
   "date": "2026-11-05",
-  "ts": "2026-11-05 14:54",
-  "score": -86,
+  "ts": "2026-11-05 15:30",
+  "score": -73,
   "label": "強烈偏空",
   "signals": [
    {
@@ -143,32 +143,30 @@
    {
     "key": "foreign",
     "name": "外資",
-    "value": "—",
-    "score": null,
+    "value": "-1,024.6 億",
+    "score": -2,
     "weight": 2.0,
-    "note": "尚未公布"
+    "note": "買超或賣超 50 億以上 ±1、200 億以上 ±2"
    },
    {
     "key": "trust",
     "name": "投信",
-    "value": "—",
-    "score": null,
+    "value": "+225.3 億",
+    "score": 2,
     "weight": 1.0,
-    "note": "尚未公布"
+    "note": "買超或賣超 20 億以上 ±1、80 億以上 ±2"
    },
    {
     "key": "foreign_streak",
     "name": "外資連續",
-    "value": "—",
-    "score": null,
+    "value": "連賣 6 天",
+    "score": -2,
     "weight": 1.0,
-    "note": "尚未公布"
+    "note": "連 3 天以上 ±1、5 天以上 ±2"
    }
   ],
   "errors": [
-   "三大法人尚未公布：fund/BFI82U {'type': 'day', 'dayDate': '20261105'}: 很抱歉，沒有符合條件的資料!",
-   "個股法人買賣超尚未公布：fund/T86 {'date': '20261105', 'selectType': 'ALLBUT0999'}: 很抱歉，沒有符合條件的資料!",
-   "月營收與本益比：JSONDecodeError: Expecting value: line 1 column 1 (char 0)"
+   "個股法人買賣超尚未公布：fund/T86 {'date': '20261105', 'selectType': 'ALLBUT0999'}: 很抱歉，沒有符合條件的資料!"
   ],
   "scheduled": true
  },
@@ -183,7 +181,7 @@
   ],
   "post": [
    "2026-11-05",
-   2
+   3
   ]
  }
 }
